@@ -99,7 +99,6 @@ randomforestpredict <- function(data, newdata){
   as.vector(predict(data, newdata=as.data.frame(newdata)))
 }
 
-                            
 nnetfit <- function(data, ...){
   nnet::nnet(y ~ ., data = data, size = 10, MaxNWts = 2000, linout = T, trace = F)
 }
@@ -123,7 +122,14 @@ create_clusters <- function(studies_list, ntest, ncoef, k){
   #cluster without using y
   #ss <- silhouette_score(k, merged[,-1])
   
-  k2 <- kmeans(merged[,-1], centers = k, nstart = 25)$cluster
+  k2 <- kmeans(merged[,-1], centers = k, nstart = 25, iter.max = 25)
+  
+  if (k2$ifault==4) { 
+    k2 = kmeans(merged[,-1], k2$centers, nstart = 25, iter.max = 25, algorithm="MacQueen")$cluster 
+  }else{
+      k2 <- k2$cluster
+    }
+  
   #k2 <- ss$km_ind
   #index_max <- ss$index_max
   clusters_list <- lapply(split(seq_along(k2), k2), #split indices by a
@@ -166,11 +172,12 @@ create_random <- function(studies_list, ntest, ncoef, nsep){
 sim_data <- function(edat_orig, ncoef, ntest){
   ndat = 15
   simtype = "nonl"
-  ninter = 4
+  #simtype = "normal"
+  ninter = 10
   good = .25
   bad =  1
   val = .4
-  icoefs <- c(4.4, 1.8)
+  icoefs <- c(4.4, 1.8, 2.5)
   setnc = TRUE 
   bin = FALSE
   
@@ -183,7 +190,7 @@ sim_data <- function(edat_orig, ncoef, ntest){
   }
   
   if (setnc == TRUE){ #setting the number of coefficients used to generate outcome
-    nchoose <- 5} #hardcoded: need to change this number
+    nchoose <- 10} #hardcoded: need to change this number
   else{#random number of coefficients used to generate the outcome
     #Generate Y - outcome for each patient given the genes selected 
     if(simtype == "nonl"){
@@ -194,9 +201,6 @@ sim_data <- function(edat_orig, ncoef, ntest){
   
   coefs <- sample(c(runif(round(nchoose/2), -5, -0.5), runif(nchoose - round(nchoose/2), 0.5, 5))) 
   vars <- sample(1:ncol(edat[[1]]), nchoose) 
-  
-  
-  
   
   #the mean percentage of the outcome (y) that is explained by the interaction terms
   for(i in 1:ndat){ #ndat is between 1 and 15 (number of datasets)
@@ -212,13 +216,16 @@ sim_data <- function(edat_orig, ncoef, ntest){
     } else if(simtype == "nonl"){
       if ((1 <= i) & (i <= ninter)){
         y <- (edat[[i]][,vars] %*% curcoefs) + icoefs[1]*edat[[i]][,vars[1]]*edat[[i]][,vars[2]] 
-        - icoefs[2]*edat[[i]][,vars[1]]*edat[[i]][,vars[3]] + cbind(rnorm(nrow(edat[[i]]))) # Added interaction terms
+        - icoefs[2]*edat[[i]][,vars[1]]*edat[[i]][,vars[3]] + #(icoefs[3]*edat[[i]][,vars[3]])^2 + 
+          10*sin(10*pi*edat[[i]][,vars[1]]) + cbind(rnorm(nrow(edat[[i]]))) # Added interaction terms
       }
       else{
         y <- (edat[[i]][,vars] %*% curcoefs) + cbind(rnorm(nrow(edat[[i]]))) # Added noise
       }
     } else {
       #y <- 10*sin(pi*edat[[i]][,2]* edat[[i]][,3])+20*(edat[[i]][,4] - .05)^2+10*edat[[i]][,5]+5*edat[[i]][,6] + cbind(rnorm(nrow(edat[[i]])))
+      #y <- runif(1, 8, 12)*sin(pi*edat[[i]][,2]* edat[[i]][,3])+runif(1, 18, 22)*(edat[[i]][,4] - .05)^2+runif(1, 8, 12)*edat[[i]][,5]+runif(1, 4, 6)*edat[[i]][,6] + cbind(rnorm(nrow(edat[[i]])))
+      
       y <- (edat[[i]][,vars] %*% curcoefs) + cbind(rnorm(nrow(edat[[i]]))) # Added noise
     }
     if (bin == TRUE){
@@ -242,14 +249,16 @@ sim_data <- function(edat_orig, ncoef, ntest){
   return(list(edat = edat, idx = idx, vars = vars, curcoefs = curcoefs))
 }
 
+
 #cluster_ind = 1 if running the algorithm on the k-means clusters, 2 if randomly generating substudies, 3 if just running on the original set of simulated studies
-clusters_fit <- function(modfit, modpred, ndat, ncoef, ntest, studies_list, cluster_ind, nsep){
-  xnam <- paste0("V", 1:ncoef)
-  formula <- as.formula(paste("y ~ ", paste(xnam, collapse= "+")))
+#rf_ind = 1 if the SSL is random forest, 2 if the SSL is ridge 
+clusters_fit <- function(modfit, modpred, ndat, ncoef, ntest, studies_list, cluster_ind, rf_ind, nsep){
+  #edat <- sim_data(ndat, ncoef)$studies_list
   if (cluster_ind == 1){ #K-means clustering
     #edat <- create_clusters(studies_list, ndat - ntest, ntest)$clusters_list
     cc <- create_clusters(studies_list, ntest, ncoef, nsep)
     edat <- cc$clusters_list
+    #index_max <- cc$index_max
   }
   else if (cluster_ind == 2){ #random 'pseudo-studies'
     edat <- create_random(studies_list, ntest, ncoef, nsep)
@@ -271,18 +280,22 @@ clusters_fit <- function(modfit, modpred, ndat, ncoef, ntest, studies_list, clus
   #matstack <- matstack[sample(nrow(matstack)), ]
   
   #mod0 <- modfit(matstack[sample(nrow(matstack)), ])
-  mod0 <- randomForest::randomForest(y ~ ., data = as.data.frame(matstack[sample(nrow(matstack)), ]), ntree = 500, importance = TRUE)
-  
+  if (rf_ind == 1){
+    mod0 <- randomForest::randomForest(y ~ ., data = as.data.frame(matstack[sample(nrow(matstack)), ]), ntree = 500, importance = TRUE)
+  }
+  else if (rf_ind == 2){
+    mod0 <- modfit(matstack[sample(nrow(matstack)), ])
+  }
   
   
   for (j in 1:ntrain){
     mods[[j]] <- modfit(edat[[j]])
     
     preds <- lapply(edat[1:ntrain], function(x){
-      modpred(mods[[j]], newdata = x) 
+      modpred(mods[[j]], newdata = x[, -1]) 
     })
     mses[j,] <- unlist(lapply(edat[1:ntrain], function(x){#cross validation within the training set
-      newdata = x
+      newdata = x[, -1]
       preds <- modpred(mods[[j]], newdata = newdata) 
       mean((preds - x[,"y"])^2)}
     ))
@@ -335,10 +348,10 @@ clusters_fit <- function(modfit, modpred, ndat, ncoef, ntest, studies_list, clus
                         "SS_noint", "SS_noint_norm", "SS_int", "Stack_lasso", "SS_lasso", "Stack_ridge", "SS_ridge")
   
   for(i in (ntrain + 1):(length(edat))){
-    merged <- modpred(mod0, newdata = edat[[i]])
+    merged <- modpred(mod0, newdata = edat[[i]][,-1])
     
     merged <- as.vector(sapply(merged, as.numeric))
-    allmod <- do.call(rbind,lapply(mods, modpred, newdata = edat[[i]]))
+    allmod <- do.call(rbind,lapply(mods, modpred, newdata = edat[[i]][,-1]))
     allmod <- apply(allmod, 2, as.numeric)
     # Unweighted average
     unweighted <- colMeans(allmod)
@@ -371,12 +384,19 @@ clusters_fit <- function(modfit, modpred, ndat, ncoef, ntest, studies_list, clus
                                   mean((cury - ss_int)^2), mean((cury - stack_lasso)^2), mean((cury - ss_lasso)^2), 
                                   mean((cury - stack_ridge)^2), mean((cury - ss_ridge)^2)))
   }
-  outmat <- (outmat - outmat[,1])/outmat[,1]*100
+  #outmat <- (outmat - outmat[,1])/outmat[,1]*100
   
-  
-  return(list(outmat = colMeans(outmat)))
-  
+  if (cluster_ind == 1){
+    return(list(outmat = colMeans(outmat)))
+  }
+  else{
+    return(list(outmat = colMeans(outmat)))
+  }
+  #return(outmat)
 }
+
+#test
+#clusters_fit(modfit = ridgefit, modpred = ridgepred, ndat = 15, ncoef = 20, ntest = 5, studies_list = sd, cluster_ind = 1, rf_ind = 2, nsep = 5)
 
 rep.clusters_fit <- function(reps, edat_orig, modfit, modpred, ndat, ntest, ncoef, k){
   #####
@@ -409,6 +429,8 @@ rep.clusters_fit <- function(reps, edat_orig, modfit, modpred, ndat, ntest, ncoe
     #for cluster: 
     cf <- clusters_fit(modfit, modpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 1, rf_ind = 1, nsep = k)
     errors_cluster <- cf$outmat
+    #indices <- c(indices, (cf$index_max+1))
+    #indices <- cf$index_max+1
     errors_random<- clusters_fit(modfit, modpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 2, rf_ind = 1, nsep = k)$outmat
     errors_multi <- clusters_fit(modfit, modpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 3, rf_ind = 1, nsep = k)$outmat
     errors_nnet <- clusters_fit(modfit = nnetfit, modpred = nnetpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 3, rf_ind = 2, nsep = k)$outmat
@@ -449,8 +471,11 @@ rep.clusters_fit <- function(reps, edat_orig, modfit, modpred, ndat, ntest, ncoe
               errors_multi = errors_multi, errors_cluster = errors_cluster, errors_random = errors_random,
               errors_ridge = errors_ridge, errors_nnet = errors_nnet))   
 }
-                      
-                      
+
+
+#t1 <- rep.clusters_fit(10, edat_orig, modfit = randomforestfit, modpred = randomforestpredict, ndat = 10, ntest = 5, ncoef = 20, k = 35)
+#print(t1)
+
 vary_levels <- function(reps, edat_orig, var_list, modfit, modpred, ndat, ntest, out_str){
   ptm = proc.time()
   colnames_total <- c("Merged", "Unweighted", "CS_Weighted",
@@ -464,6 +489,8 @@ vary_levels <- function(reps, edat_orig, var_list, modfit, modpred, ndat, ntest,
   colnames(total_sds_multi) <- colnames(total_sds_cluster) <- colnames(total_sds_random) <- 
     colnames(total_sds_ridge) <- colnames(total_sds_nnet) <- colnames_total
   
+  #indices_mat <- array(0, c(length(var_list), 2))
+  #colnames(indices_mat) <- c("mean", "sd")
   
   for (i in 1:length(var_list)){
     level <- var_list[i]
@@ -514,7 +541,7 @@ vary_levels <- function(reps, edat_orig, var_list, modfit, modpred, ndat, ntest,
 
 
 
-#Run the following 
+#Run the following:
 k_list <- c(2, 5, 8, 10, 15, 20, 30, 40, 50, 60, 70, 80, 90, 100)
 cs <- vary_levels(reps = 250, edat_orig, var_list = k_list, modfit = randomforestfit, modpred = randomforestpredict, ndat = 15, ntest = 5, out_str = "cs")
 
