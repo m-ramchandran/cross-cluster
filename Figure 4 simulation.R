@@ -218,6 +218,7 @@ sim_data <- function(edat_orig, ncoef, ntest){
         y <- (edat[[i]][,vars] %*% curcoefs) + cbind(rnorm(nrow(edat[[i]]))) # Added noise
       }
     } else {
+      #y <- 10*sin(pi*edat[[i]][,2]* edat[[i]][,3])+20*(edat[[i]][,4] - .05)^2+10*edat[[i]][,5]+5*edat[[i]][,6] + cbind(rnorm(nrow(edat[[i]])))
       y <- (edat[[i]][,vars] %*% curcoefs) + cbind(rnorm(nrow(edat[[i]]))) # Added noise
     }
     if (bin == TRUE){
