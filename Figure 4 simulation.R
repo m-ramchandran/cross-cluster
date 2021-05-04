@@ -99,6 +99,23 @@ randomforestpredict <- function(data, newdata){
   as.vector(predict(data, newdata=as.data.frame(newdata)))
 }
 
+                            
+nnetfit <- function(data, ...){
+  nnet::nnet(y ~ ., data = data, size = 10, MaxNWts = 2000, linout = T, trace = F)
+}
+
+nnetpred <- function(mod, newdata){
+  as.vector(predict(mod, newdata = newdata))
+}
+
+ridgefit <- function(data, ...){
+  mod <- glmnet::cv.glmnet(x = as.matrix(data[,-1]), y = data[,1], alpha = 0, ...)
+}
+
+ridgepred <- function(mod, newdata){
+  as.vector(predict(mod, newx=as.matrix(newdata), s="lambda.1se"))
+}
+
 
 create_clusters <- function(studies_list, ntest, ncoef, k){
   merged <- do.call(rbind, studies_list[1:(length(studies_list) - ntest)])
@@ -365,11 +382,9 @@ rep.clusters_fit <- function(reps, edat_orig, modfit, modpred, ndat, ntest, ncoe
   logfile <- paste0("outputFile","nonsparsity",".txt")
   writeLines(c(""), file(logfile,'w'))
   
-  num.threads <- round(reps/10)# round up
-  #num.threads <- round(1)# round up
-  
-  #num.threads <- as.integer(reps)
-  threads <- makeCluster(num.threads, outfile=logfile)
+  #num.threads <- as.integer(reps/10)# round up
+  num.threads <- as.integer(10)
+  threads <- makeCluster(num.threads, outfile=logfile, setup_timeout = 0.5)
   registerDoParallel(threads)
   
   getDoParWorkers()
@@ -388,26 +403,28 @@ rep.clusters_fit <- function(reps, edat_orig, modfit, modpred, ndat, ntest, ncoe
     library(nnls)
     library(plyr)
     library(BiocGenerics)
-    library(genefilter)
-    library(curatedOvarianData)
-    library(rpart)
-    library(Biobase)
-    library(dplyr)
+    library(clusterGeneration)
     sd <- sim_data(edat_orig, ncoef = ncoef, ntest = ntest)$edat
     #for cluster: 
-    cf <- clusters_fit(modfit, modpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 1, nsep = k)
+    cf <- clusters_fit(modfit, modpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 1, rf_ind = 1, nsep = k)
     errors_cluster <- cf$outmat
-    errors_random<- clusters_fit(modfit, modpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 2, nsep = k)$outmat
-    errors_multi <- clusters_fit(modfit, modpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 3, nsep = k)$outmat
+    errors_random<- clusters_fit(modfit, modpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 2, rf_ind = 1, nsep = k)$outmat
+    errors_multi <- clusters_fit(modfit, modpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 3, rf_ind = 1, nsep = k)$outmat
+    errors_nnet <- clusters_fit(modfit = nnetfit, modpred = nnetpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 3, rf_ind = 2, nsep = k)$outmat
+    #errors_ridge <- clusters_fit(modfit = ridgefit, modpred = ridgepred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 3, rf_ind = 2, nsep = k)$outmat
+    errors_ridge <- clusters_fit(modfit = nnetfit, modpred = nnetpred, ndat, ncoef, ntest, studies_list = sd, cluster_ind = 1, rf_ind = 2, nsep = k)$outmat
     
-    print(errors_multi)
-    return(list(errors_cluster = errors_cluster, errors_random = errors_random, errors_multi = errors_multi))
+    return(list(errors_cluster = errors_cluster, errors_random = errors_random, errors_multi = errors_multi, 
+                errors_ridge = errors_ridge, errors_nnet = errors_nnet))
   }
   closeAllConnections()
-  errors_cluster = results[[1]][,-3]
-  errors_random = results[[2]][,-3]
-  errors_multi = results[[3]][,-3]
   
+  errors_cluster = (results[[1]])[,-3]
+  errors_random = (results[[2]])[,-3]
+  errors_multi = (results[[3]])[,-3]
+  errors_ridge = (results[[4]])[,-3]
+  errors_nnet = (results[[5]])[,-3]
+
   colnames(errors_multi) <- colnames(errors_cluster) <- colnames(errors_random) <- c("Merged", "Unweighted", "CS_Weighted",
                                                                                      "Stack_noint", "Stack_noint_norm", "Stack_int",
                                                                                      "SS_noint", "SS_noint_norm", "SS_int", "Stack_lasso", "SS_lasso", "Stack_ridge", "SS_ridge")
@@ -415,25 +432,37 @@ rep.clusters_fit <- function(reps, edat_orig, modfit, modpred, ndat, ntest, ncoe
   means_multi <- colMeans(errors_multi)
   means_cluster <- colMeans(errors_cluster)
   means_random <- colMeans(errors_random)
+  means_ridge <- colMeans(errors_ridge)
+  means_nnet <- colMeans(errors_nnet)
+  
   sds_multi <- apply(errors_multi, 2, sd)
   sds_cluster <- apply(errors_cluster, 2, sd)
   sds_random <- apply(errors_random, 2, sd)
+  sds_ridge <- apply(errors_ridge, 2, sd)
+  sds_nnet <- apply(errors_nnet, 2, sd)
   
-  return(list(means_multi = means_multi, means_cluster = means_cluster, means_random = means_random,
+  return(list(means_multi = means_multi, means_cluster = means_cluster, means_random = means_random, 
+              means_ridge = means_ridge, means_nnet = means_nnet,
               sds_multi = sds_multi, sds_cluster = sds_cluster, sds_random = sds_random,
-              errors_multi = errors_multi, errors_cluster = errors_cluster, errors_random = errors_random))   
+              sds_ridge = sds_ridge, sds_nnet = sds_nnet, 
+              errors_multi = errors_multi, errors_cluster = errors_cluster, errors_random = errors_random,
+              errors_ridge = errors_ridge, errors_nnet = errors_nnet))   
 }
-
-vary_levels <- function(reps, var_list, edat_orig, modfit, modpred, ndat, ntest, out_str){
+                      
+                      
+vary_levels <- function(reps, edat_orig, var_list, modfit, modpred, ndat, ntest, out_str){
   ptm = proc.time()
   colnames_total <- c("Merged", "Unweighted", "CS_Weighted",
                       "Stack_noint", "Stack_noint_norm", "Stack_int",
                       "SS_noint", "SS_noint_norm", "SS_int", "Stack_lasso", "SS_lasso", "Stack_ridge", "SS_ridge")
-  total_means_multi <- total_means_cluster <- total_means_random <- array(0, c(length(var_list), 13))
-  total_sds_multi <- total_sds_cluster <- total_sds_random <- array(0, c(length(var_list), 13))
+  total_means_multi <- total_means_cluster <- total_means_random <- total_means_ridge <- total_means_nnet <- array(0, c(length(var_list), 13))
+  total_sds_multi <- total_sds_cluster <- total_sds_random <- total_sds_ridge <- total_sds_nnet <- array(0, c(length(var_list), 13))
   
-  colnames(total_means_multi) <- colnames(total_means_cluster) <- colnames(total_means_random) <- colnames_total 
-  colnames(total_sds_multi) <- colnames(total_sds_cluster) <- colnames(total_sds_random) <- colnames_total
+  colnames(total_means_multi) <- colnames(total_means_cluster) <- colnames(total_means_random) <- 
+    colnames(total_means_ridge) <- colnames(total_means_nnet) <- colnames_total 
+  colnames(total_sds_multi) <- colnames(total_sds_cluster) <- colnames(total_sds_random) <- 
+    colnames(total_sds_ridge) <- colnames(total_sds_nnet) <- colnames_total
+  
   
   for (i in 1:length(var_list)){
     level <- var_list[i]
@@ -444,35 +473,48 @@ vary_levels <- function(reps, var_list, edat_orig, modfit, modpred, ndat, ntest,
     total_means_multi[i,] <- level_rep$means_multi
     total_means_cluster[i,] <- level_rep$means_cluster
     total_means_random[i,] <- level_rep$means_random
+    total_means_ridge[i, ] <- level_rep$means_ridge
+    total_means_nnet[i, ] <- level_rep$means_nnet
     #sds
     total_sds_multi[i,] <- level_rep$sds_multi
     total_sds_cluster[i,] <- level_rep$sds_cluster
     total_sds_random[i,] <- level_rep$sds_random
-
+    total_sds_ridge[i, ] <- level_rep$sds_ridge
+    total_sds_nnet[i, ] <- level_rep$sds_nnet
+    #indices
+    #indices_mat[i,] <- c(mean(level_rep$indices), sd(level_rep$indices))
+    
     write.table(level_rep$errors_multi, paste0(out_str,"_errors_multi",level,".csv"), sep = ",", col.names = colnames_total)
     write.table(level_rep$errors_cluster, paste0(out_str,"_errors_cluster",level,".csv"), sep = ",", col.names = colnames_total)
     write.table(level_rep$errors_random, paste0(out_str,"_errors_random",level,".csv"), sep = ",", col.names = colnames_total)
+    write.table(level_rep$errors_ridge, paste0(out_str,"_errors_ridge",level,".csv"), sep = ",", col.names = colnames_total)
+    write.table(level_rep$errors_nnet, paste0(out_str,"_errors_nnet",level,".csv"), sep = ",", col.names = colnames_total)
   }
-  
-  colnames(total_means_multi) <- colnames(total_means_cluster) <- colnames(total_means_random) <- colnames_total 
-  colnames(total_sds_multi) <- colnames(total_sds_cluster) <- colnames(total_sds_random) <- colnames_total
-  
   write.table(total_means_multi, paste0(out_str,"_means_multi.csv"), sep = ",", row.names = var_list, col.names = colnames_total)
   write.table(total_means_cluster, paste0(out_str,"_means_cluster.csv"), sep = ",", row.names = var_list, col.names = colnames_total)
   write.table(total_means_random, paste0(out_str,"_means_random.csv"), sep = ",", row.names = var_list, col.names = colnames_total)
+  write.table(total_means_ridge, paste0(out_str,"_means_ridge.csv"), sep = ",", row.names = var_list, col.names = colnames_total)
+  write.table(total_means_nnet, paste0(out_str,"_means_nnet.csv"), sep = ",", row.names = var_list, col.names = colnames_total)
   
   write.table(total_sds_multi, paste0(out_str,"_sds_multi.csv"), sep = ",", row.names = var_list, col.names = colnames_total)
   write.table(total_sds_cluster, paste0(out_str,"_sds_cluster.csv"), sep = ",", row.names = var_list, col.names = colnames_total)
   write.table(total_sds_random, paste0(out_str,"_sds_random.csv"), sep = ",", row.names = var_list, col.names = colnames_total)
+  write.table(total_sds_ridge, paste0(out_str,"_sds_ridge.csv"), sep = ",", row.names = var_list, col.names = colnames_total)
+  write.table(total_sds_nnet, paste0(out_str,"_sds_nnet.csv"), sep = ",", row.names = var_list, col.names = colnames_total)
   
   #write.table(indices_mat, paste0(out_str,"_numclusters.csv"), sep = ",", row.names = var_list, col.names = c("mean", "sd"))
   
-  return(list(total_means_multi = total_means_multi, total_means_cluster = total_means_cluster, total_means_random = total_means_random,
-              total_sds_multi = total_sds_multi, total_sds_cluster = total_sds_cluster, total_sds_random = total_sds_random))
+  return(list(total_means_multi = total_means_multi, total_means_cluster = total_means_cluster, 
+              total_means_random = total_means_random, total_means_ridge = total_means_ridge, total_means_nnet = total_means_nnet, 
+              total_sds_multi = total_sds_multi, total_sds_cluster = total_sds_cluster, 
+              total_sds_random = total_sds_random, total_sds_ridge = total_sds_ridge, total_sds_nnet = total_sds_nnet))
 }
 
-#Run the following
-k_list <- c(2:10, seq(10, 80, 10))
-cs <- vary_levels(reps = 250, var_list = k_list, edat_orig, modfit = randomforestfit, modpred = randomforestpredict, ndat = 15, ntest = 5, out_str = "cs")
+
+
+
+#Run the following 
+k_list <- c(2, 5, 8, 10, 15, 20, 30, 40, 50, 60, 70, 80, 90, 100)
+cs <- vary_levels(reps = 250, edat_orig, var_list = k_list, modfit = randomforestfit, modpred = randomforestpredict, ndat = 15, ntest = 5, out_str = "cs")
 
 
