@@ -167,8 +167,52 @@ absnorm <- function(vec, max.norm = FALSE){
   vec <- abs(vec - mvec)
   sgn*(vec/sum(vec))
 }
+                            
+#clustering using mclust
+create_clusters <- function(orig_data, X, ntest, k){
+  change_order <- sample(nrow(X))
+  
+  X <- X[change_order, ]
+  merged <- X[-c(1:ntest), ]
+  #merged <- merged[sample(nrow(merged)), ]
+  #cluster without using y
+  
+  #mclust
+  vm <- vscc(x = merged[,-1], G = c(5, 9, 13), forcereduction = TRUE)
+  print(vm$bestmodel$G)
+  k2 <- vm$bestmodel$classification
+  
+  #k_means
+  # k2 <- kmeans(merged[,-1], centers = k, nstart = 25, iter.max = 25)
+  # if (k2$ifault==4) { 
+  #   k2 = kmeans(merged[,-1], k2$centers, nstart = 25, iter.max = 25, algorithm="MacQueen")$cluster 
+  # }else{
+  #   k2 <- k2$cluster
+  # }
+  # 
+  orig_data <- orig_data[change_order, ]
+  training_data <- orig_data[-c(1:ntest), ]
+  
+  clusters_list <- lapply(split(seq_along(k2), k2), 
+                          function(m, ind) m[ind,], m = training_data)[order(unique(k2))]
+  len_clust <- sapply(clusters_list, function(i) nrow(i))
+  wlc <- which(len_clust <= 2)
+  if (any(wlc)){
+    clusters_list <- clusters_list[-wlc]
+  }
+  nclusters <- length(clusters_list)
+  #add test set
+  clusters_list[[nclusters + 1]] <- orig_data[c(1:ntest), ]
+  for (j in 1:length(clusters_list)){
+    clusters_list[[j]][,1] <- as.factor(clusters_list[[j]][,1])
+  }
+  
+  return(list(clusters_list = clusters_list))
+}
+                            
+                            
 
-
+#Using the true clusters from the paper
 create_clusters_comb <- function(data_full, nsep, ind_merged, ind_test){
   ntest = 1
   ndat = nsep + ntest
