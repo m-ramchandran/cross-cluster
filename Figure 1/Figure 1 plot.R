@@ -4,7 +4,7 @@ library(ggplot2)
 library(ggpubr)
 
 #INSTRUCTIONS:
-#First run all code in Figure2a_code.R, Figure2b_code.R, and Figure2c_code.R
+#First run all code in Figure1a_code.R, Figure1b_code.R, and Figure1c_code.R
 #This code assumes particular directories for each of the results, but can be easily changed. 
 
 # Plotting function
